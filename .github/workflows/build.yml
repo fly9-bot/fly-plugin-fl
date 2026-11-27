@@ -2,6 +2,8 @@ name: Compilar plugins VST3 (Windows)
 on:
   push:
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   windows:
     runs-on: windows-latest
@@ -19,3 +21,17 @@ jobs:
         with:
           name: ${{ matrix.plugin }}-VST3-Windows
           path: build/${{ matrix.plugin }}_artefacts/Release/VST3
+      - name: Empaquetar para Releases
+        if: startsWith(github.ref, 'refs/tags/')
+        run: Compress-Archive -Path "build/${{ matrix.plugin }}_artefacts/Release/VST3/*" -DestinationPath "${{ matrix.plugin }}-Windows.zip"
+      - name: Publicar en Releases
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.plugin }}-Windows.zip
+          name: FLY Plugins ${{ github.ref_name }}
+          body: |
+            Plugins VST3 de FLY para FL Studio (Windows 64 bits).
+            1. Bajá los ZIP y descomprimilos.
+            2. Copiá las carpetas .vst3 a C:\Program Files\Common Files\VST3\
+            3. En FL Studio: Options > Manage plugins > Find installed plugins.
