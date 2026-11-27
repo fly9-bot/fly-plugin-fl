@@ -1,0 +1,20 @@
+name: Compilar plugins VST3 (Windows)
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  windows:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        plugin: [FlyVozEQ, FlyMixChat]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configurar
+        run: cmake -S ${{ matrix.plugin }} -B build -G "Visual Studio 17 2022" -A x64
+      - name: Compilar
+        run: cmake --build build --config Release --target ${{ matrix.plugin }}_VST3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.plugin }}-VST3-Windows
+          path: build/${{ matrix.plugin }}_artefacts/Release/VST3
