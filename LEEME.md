@@ -11,7 +11,7 @@ Este paquete tiene dos plugins VST3, los dos en código fuente (C++ con JUCE).
 2. Instalá **Git** (git-scm.com).
 3. Abrí la *Developer PowerShell for VS 2022*, entrá a la carpeta del plugin y ejecutá:
    ```
-   cmake -B build -G "Visual Studio 17 2022" -A x64
+   cmake -B build -A x64
    cmake --build build --config Release --target FlyVozEQ_VST3
    ```
    (Para el otro plugin, cambiá el target a `FlyMixChat_VST3`.) La primera vez baja JUCE solo y tarda unos minutos.
