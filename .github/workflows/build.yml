@@ -21,19 +21,39 @@ jobs:
         with:
           name: ${{ matrix.plugin }}-VST3-Windows
           path: build/${{ matrix.plugin }}_artefacts/Release/VST3
-      - name: Empaquetar para Releases
-        if: github.ref == 'refs/heads/main'
-        run: Compress-Archive -Path "build/${{ matrix.plugin }}_artefacts/Release/VST3/*" -DestinationPath "${{ matrix.plugin }}-Windows.zip"
+  installer:
+    needs: windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: plugins
+          merge-multiple: true
+      - name: Instalar Inno Setup si falta
+        run: if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+      - name: Crear instalador
+        run: '& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer\FLY-Plugins.iss'
+      - name: Crear ZIPs sueltos
+        run: |
+          Compress-Archive -Path "plugins/FLY VozEQ.vst3" -DestinationPath out/FlyVozEQ-Windows.zip
+          Compress-Archive -Path "plugins/FLY MixChat.vst3" -DestinationPath out/FlyMixChat-Windows.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FLY-Plugins-Setup
+          path: out/FLY-Plugins-Setup.exe
       - name: Publicar en Releases
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ matrix.plugin }}-Windows.zip
           tag_name: v1.0
           name: FLY Plugins v1.0
           make_latest: true
+          files: |
+            out/FLY-Plugins-Setup.exe
+            out/FlyVozEQ-Windows.zip
+            out/FlyMixChat-Windows.zip
           body: |
             Plugins VST3 de FLY para FL Studio (Windows 64 bits).
-            1. Bajá los ZIP y descomprimilos.
-            2. Copiá las carpetas .vst3 a C:\Program Files\Common Files\VST3\
-            3. En FL Studio: Options > Manage plugins > Find installed plugins.
+            **Lo más fácil:** bajá FLY-Plugins-Setup.exe, abrilo y tocá Siguiente > Instalar.
+            Después, en FL Studio: Options > Manage plugins > Find installed plugins.
