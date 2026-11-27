@@ -22,14 +22,16 @@ jobs:
           name: ${{ matrix.plugin }}-VST3-Windows
           path: build/${{ matrix.plugin }}_artefacts/Release/VST3
       - name: Empaquetar para Releases
-        if: startsWith(github.ref, 'refs/tags/')
+        if: github.ref == 'refs/heads/main'
         run: Compress-Archive -Path "build/${{ matrix.plugin }}_artefacts/Release/VST3/*" -DestinationPath "${{ matrix.plugin }}-Windows.zip"
       - name: Publicar en Releases
-        if: startsWith(github.ref, 'refs/tags/')
+        if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ matrix.plugin }}-Windows.zip
-          name: FLY Plugins ${{ github.ref_name }}
+          tag_name: v1.0
+          name: FLY Plugins v1.0
+          make_latest: true
           body: |
             Plugins VST3 de FLY para FL Studio (Windows 64 bits).
             1. Bajá los ZIP y descomprimilos.
