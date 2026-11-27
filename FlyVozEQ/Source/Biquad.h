@@ -3,6 +3,8 @@
 #include <complex>
 
 // Filtro biquad (recetas RBJ). Sin memoria dinámica: seguro para el hilo de audio.
+static constexpr double kPi = 3.14159265358979323846;
+
 struct Biquad
 {
     float b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0;
@@ -11,7 +13,7 @@ struct Biquad
     void setPeak (double fs, double f, double q, double gainDb)
     {
         const double A = std::pow (10.0, gainDb / 40.0);
-        const double w = 2.0 * M_PI * f / fs;
+        const double w = 2.0 * kPi * f / fs;
         const double alpha = std::sin (w) / (2.0 * q);
         const double c = std::cos (w);
         const double a0 = 1.0 + alpha / A;
@@ -24,7 +26,7 @@ struct Biquad
 
     void setHighpass (double fs, double f, double q)
     {
-        const double w = 2.0 * M_PI * f / fs;
+        const double w = 2.0 * kPi * f / fs;
         const double alpha = std::sin (w) / (2.0 * q);
         const double c = std::cos (w);
         const double a0 = 1.0 + alpha;
@@ -48,7 +50,7 @@ struct Biquad
     // Respuesta en dB a una frecuencia (para dibujar la curva).
     double magnitudeDb (double f, double fs) const
     {
-        const double w = 2.0 * M_PI * f / fs;
+        const double w = 2.0 * kPi * f / fs;
         const std::complex<double> z1c = std::polar (1.0, -w), z2c = std::polar (1.0, -2.0 * w);
         const auto num = (double) b0 + (double) b1 * z1c + (double) b2 * z2c;
         const auto den = 1.0 + (double) a1 * z1c + (double) a2 * z2c;

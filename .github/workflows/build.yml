@@ -6,6 +6,7 @@ jobs:
   windows:
     runs-on: windows-latest
     strategy:
+      fail-fast: false
       matrix:
         plugin: [FlyVozEQ, FlyMixChat]
     steps:
