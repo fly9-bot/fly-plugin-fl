@@ -1,5 +1,5 @@
 #define AppName "FLY Plugins"
-#define AppVersion "1.0"
+#define AppVersion "1.1"
 
 [Setup]
 AppId={{6F1D3A52-8B7E-4C1F-9A2D-FLY000000001}

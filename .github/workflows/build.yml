@@ -46,8 +46,8 @@ jobs:
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0
-          name: FLY Plugins v1.0
+          tag_name: v1.1
+          name: FLY Plugins v1.1
           make_latest: true
           files: |
             out/FLY-Plugins-Setup.exe

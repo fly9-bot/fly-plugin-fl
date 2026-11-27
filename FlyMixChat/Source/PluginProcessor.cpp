@@ -47,7 +47,7 @@ bool FlyMixChatProcessor::isBusesLayoutSupported (const BusesLayout& layouts) co
     return in == juce::AudioChannelSet::mono() || in == juce::AudioChannelSet::stereo();
 }
 
-void FlyMixChatProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
+void FlyMixChatProcessor::prepareToPlay (double sampleRate, int)
 {
     fs = sampleRate;
     for (auto& f : filt)
@@ -56,19 +56,21 @@ void FlyMixChatProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
         f.deessHp.setHighpass (fs, 5500.0, 0.707);
     }
     lastFilterValues.fill (-999.0f);
-    compEnv = deessEnv = 0.0f;
+    compEnv = deessEnv = duckEnv = limEnv = 0.0f;
 
-    widthBuf.assign ((size_t) (fs * 0.05) + 2, 0.0f);
-    widthPos = 0;
-    for (auto& d : delayBuf) d.assign ((size_t) (fs * 2.5) + 2, 0.0f);
+    // Al envío de efectos le sacamos graves y eses: los efectos quedan limpios y no embarran
+    sendHp.reset(); sendHp.setHighpass (fs, 300.0, 0.707);
+    sendLp.reset();
+    sendLp.setShelf (fs, juce::jmin (6500.0, fs * 0.4), -12.0, true);
+    for (auto& f : satLp) { f.reset(); f.setShelf (fs, juce::jmin (9000.0, fs * 0.4), -4.0, true); }
+
+    for (auto& d : delayBuf) d.assign ((size_t) (fs * 2.5) + 4, 0.0f);
     delayPos = 0;
     delayLp.fill (0.0f);
-    delayTimeSamples.reset (sampleRate, 0.3);
+    delayTimeSamples.reset (sampleRate, 0.25);
     delayTimeSamples.setCurrentAndTargetValue ((float) (fs * 0.5));
 
-    reverb.reset();
-    reverb.setSampleRate (sampleRate);
-    wetBuf.setSize (2, samplesPerBlock, false, false, true);
+    reverb.prepare (fs);
     outGain.reset (sampleRate, 0.05);
     outGain.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (p ("salida")));
 }
@@ -108,43 +110,44 @@ void FlyMixChatProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
     const int numOut = juce::jmin (2, getTotalNumOutputChannels());
     if (numIn == 1 && numOut == 2) buffer.copyFrom (1, 0, buffer, 0, 0, n); // mono -> estéreo
     for (int ch = numOut; ch < buffer.getNumChannels(); ++ch) buffer.clear (ch, 0, n);
-    if (wetBuf.getNumSamples() < n) return; // no debería pasar
 
-    // ---- Filtros: solo se recalculan si cambió algo ----
+    // ---- EQ: solo se recalcula si cambió algo ----
     const float vals[5] = { p ("corte"), p ("graves"), p ("barro"), p ("presencia"), p ("aire") };
-    if (vals[0] != lastFilterValues[0] || vals[1] != lastFilterValues[1] || vals[2] != lastFilterValues[2]
-        || vals[3] != lastFilterValues[3] || vals[4] != lastFilterValues[4])
+    bool changed = false;
+    for (int i = 0; i < 5; ++i) changed |= vals[i] != lastFilterValues[(size_t) i];
+    if (changed)
     {
         for (auto& f : filt)
         {
             f.hpf.setHighpass (fs, vals[0], 0.707);
-            f.low.setShelf (fs, 140.0, vals[1], false);
-            f.mud.setPeak (fs, 320.0, 1.0, vals[2]);
-            f.pres.setPeak (fs, 3200.0, 0.9, vals[3]);
-            f.air.setShelf (fs, juce::jmin (11000.0, fs * 0.4), vals[4], true);
+            f.low.setShelf (fs, 160.0, vals[1], false);
+            f.mud.setPeak (fs, 350.0, 1.1, vals[2]);
+            f.pres.setPeak (fs, 3500.0, 0.8, vals[3]);
+            f.air.setShelf (fs, juce::jmin (10000.0, fs * 0.4), vals[4], true);
         }
         for (int i = 0; i < 5; ++i) lastFilterValues[(size_t) i] = vals[i];
     }
 
-    // ---- Dinámica ----
+    // ---- Compresor (voz pegada al frente) ----
     const float compAmt = p ("compresion") / 100.0f;
-    const float thr = -6.0f - 24.0f * compAmt;
-    const float ratio = 1.5f + 4.5f * compAmt;
-    const float makeup = compAmt > 0.0f ? -thr * (1.0f - 1.0f / ratio) * 0.35f : 0.0f;
-    const float atk = std::exp (-1.0f / (0.008f * (float) fs)), rel = std::exp (-1.0f / (0.12f * (float) fs));
+    const float thr = -8.0f - 26.0f * compAmt;
+    const float ratio = 2.0f + 6.0f * compAmt;
+    const float makeup = -thr * (1.0f - 1.0f / ratio) * 0.45f;
+    const float atk = std::exp (-1.0f / (0.002f * (float) fs)), rel = std::exp (-1.0f / (0.09f * (float) fs));
 
+    // ---- De-esser ----
     const float deAmt = p ("deesser") / 100.0f;
-    const float deThr = -12.0f - 26.0f * deAmt;
-    const float deAtk = std::exp (-1.0f / (0.001f * (float) fs)), deRel = std::exp (-1.0f / (0.06f * (float) fs));
+    const float deThr = -14.0f - 24.0f * deAmt;
+    const float deAtk = std::exp (-1.0f / (0.0007f * (float) fs)), deRel = std::exp (-1.0f / (0.05f * (float) fs));
 
+    // ---- Saturación en paralelo (calienta sin romper) ----
     const float satAmt = p ("saturacion") / 100.0f;
-    const float drive = 1.0f + 8.0f * satAmt;
+    const float drive = 1.5f + 5.0f * satAmt;
+    const float satNorm = 1.0f / std::tanh (drive * 0.5f) * 0.5f;
+    const float satMix = 0.7f * satAmt;
 
+    // ---- Envío de efectos ----
     const float width = p ("ancho") / 100.0f;
-    const int wA = (int) (0.011 * fs), wB = (int) (0.019 * fs);
-    const int wSize = (int) widthBuf.size();
-
-    // ---- Delay sincronizado al tempo del proyecto ----
     double bpm = 120.0;
     if (auto* ph = getPlayHead())
         if (auto pos = ph->getPosition())
@@ -152,13 +155,20 @@ void FlyMixChatProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
     static constexpr double beats[4] = { 1.0, 0.75, 0.5, 0.25 };
     const int nota = juce::jlimit (0, 3, (int) p ("delaynota"));
     delayTimeSamples.setTargetValue ((float) juce::jmin (fs * 2.4, fs * 60.0 / bpm * beats[nota]));
-    const float delayMix = p ("delay") / 100.0f * 0.55f;
-    const float fb = 0.25f + 0.2f * (p ("delay") / 100.0f);
-    const float lpCoef = std::exp (-2.0f * juce::MathConstants<float>::pi * 4000.0f / (float) fs);
+    const float delayAmt = p ("delay") / 100.0f;
+    const float delayRet = 2.0f * delayAmt;
+    const float fb = 0.30f + 0.25f * delayAmt;
+    const float dlpCoef = std::exp (-2.0f * juce::MathConstants<float>::pi * 3500.0f / (float) fs);
     const int dSize = (int) delayBuf[0].size();
 
+    const float revAmt = p ("reverb") / 100.0f;
+    const float sala = p ("sala") / 100.0f;
+    reverb.setParams (0.8f + 3.2f * sala, 7500.0f - 3000.0f * sala, 15.0f + 45.0f * sala);
+    const float revRet = 3.2f * revAmt;
+    const float duckAtk = std::exp (-1.0f / (0.01f * (float) fs)), duckRel = std::exp (-1.0f / (0.35f * (float) fs));
+    const float fxSide = 0.4f + 1.1f * width;
+
     float* ch[2] = { buffer.getWritePointer (0), numOut > 1 ? buffer.getWritePointer (1) : nullptr };
-    float* wet[2] = { wetBuf.getWritePointer (0), wetBuf.getWritePointer (1) };
     float maxGr = 0.0f;
 
     for (int i = 0; i < n; ++i)
@@ -176,12 +186,12 @@ void FlyMixChatProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
             x[c] = s;
         }
 
-        // De-esser: separa las eses (agudos) y las baja solo cuando aparecen
+        // De-esser
         float hi[2] {}, hiPeak = 0.0f;
         for (int c = 0; c < numOut; ++c) { hi[c] = filt[(size_t) c].deessHp.process (x[c], c); hiPeak = juce::jmax (hiPeak, std::abs (hi[c])); }
         deessEnv = hiPeak > deessEnv ? deAtk * deessEnv + (1 - deAtk) * hiPeak : deRel * deessEnv + (1 - deRel) * hiPeak;
         const float deDb = juce::Decibels::gainToDecibels (deessEnv, -100.0f);
-        const float deGain = (deAmt > 0.0f && deDb > deThr) ? juce::Decibels::decibelsToGain (-(deDb - deThr) * 0.75f) : 1.0f;
+        const float deGain = (deAmt > 0.0f && deDb > deThr) ? juce::Decibels::decibelsToGain (juce::jmax (-14.0f, -(deDb - deThr) * 0.8f)) : 1.0f;
         for (int c = 0; c < numOut; ++c) x[c] -= hi[c] * (1.0f - deGain);
 
         // Compresor
@@ -189,67 +199,66 @@ void FlyMixChatProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
         for (int c = 0; c < numOut; ++c) peak = juce::jmax (peak, std::abs (x[c]));
         compEnv = peak > compEnv ? atk * compEnv + (1 - atk) * peak : rel * compEnv + (1 - rel) * peak;
         const float envDb = juce::Decibels::gainToDecibels (compEnv, -100.0f);
-        const float gr = (compAmt > 0.0f && envDb > thr) ? (envDb - thr) * (1.0f - 1.0f / ratio) : 0.0f;
+        const float gr = envDb > thr ? (envDb - thr) * (1.0f - 1.0f / ratio) : 0.0f;
         maxGr = juce::jmax (maxGr, gr);
         const float cg = juce::Decibels::decibelsToGain (makeup - gr);
 
         for (int c = 0; c < numOut; ++c)
         {
             float s = x[c] * cg;
-            if (satAmt > 0.0f)
-                s = s + satAmt * (std::tanh (drive * s) / drive - s); // calidez / suciedad
+            if (satMix > 0.0f)
+            {
+                const float sat = satLp[c].process (std::tanh (drive * s * 0.5f) * satNorm, c);
+                s += satMix * (sat - s) + satMix * 0.5f * sat; // mezcla paralela con cuerpo extra
+            }
             x[c] = s;
         }
 
-        // Ancho: agrega un lado estéreo que desaparece en mono (no rompe la compatibilidad)
+        // ---- Efectos ----
         const float mono = numOut > 1 ? 0.5f * (x[0] + x[1]) : x[0];
-        widthBuf[(size_t) widthPos] = mono;
-        if (numOut > 1 && width > 0.0f)
-        {
-            const float side = 0.5f * width * (widthBuf[(size_t) ((widthPos - wA + wSize) % wSize)]
-                                             - widthBuf[(size_t) ((widthPos - wB + wSize) % wSize)]);
-            x[0] += side; x[1] -= side;
-        }
-        widthPos = (widthPos + 1) % wSize;
+        const float aMono = std::abs (mono);
+        duckEnv = aMono > duckEnv ? duckAtk * duckEnv + (1 - duckAtk) * aMono : duckRel * duckEnv + (1 - duckRel) * aMono;
+        const float duck = 1.0f / (1.0f + 4.0f * duckEnv);   // los efectos bajan mientras cantás y suben en los huecos
+        const float send = sendLp.process (sendHp.process (mono, 0), 0);
 
-        // Delay ping-pong con repeticiones cada vez más oscuras
-        const int dt = juce::jlimit (1, dSize - 1, (int) delayTimeSamples.getNextValue());
-        const int rp = (delayPos - dt + dSize) % dSize;
-        const float dl = delayBuf[0][(size_t) rp], dr = delayBuf[1][(size_t) rp];
-        delayLp[0] = lpCoef * delayLp[0] + (1 - lpCoef) * dr;
-        delayLp[1] = lpCoef * delayLp[1] + (1 - lpCoef) * dl;
-        delayBuf[0][(size_t) delayPos] = mono + fb * delayLp[0];
+        // Delay ping-pong con lectura suave (sin clics al cambiar de tempo)
+        const float dt = juce::jlimit (2.0f, (float) dSize - 2.0f, delayTimeSamples.getNextValue());
+        float rpos = (float) delayPos - dt;
+        if (rpos < 0) rpos += (float) dSize;
+        const int r0 = (int) rpos; const float fr = rpos - (float) r0; const int r1 = (r0 + 1) % dSize;
+        const float dl = delayBuf[0][(size_t) r0] * (1 - fr) + delayBuf[0][(size_t) r1] * fr;
+        const float dr = delayBuf[1][(size_t) r0] * (1 - fr) + delayBuf[1][(size_t) r1] * fr;
+        delayLp[0] = dlpCoef * delayLp[0] + (1 - dlpCoef) * dr;
+        delayLp[1] = dlpCoef * delayLp[1] + (1 - dlpCoef) * dl;
+        delayBuf[0][(size_t) delayPos] = send + fb * delayLp[0];
         delayBuf[1][(size_t) delayPos] = fb * delayLp[1];
-        delayPos = (delayPos + 1) % dSize;
-        if (numOut > 1) { x[0] += delayMix * dl; x[1] += delayMix * dr; }
-        else            { x[0] += delayMix * 0.5f * (dl + dr); }
+        if (++delayPos >= dSize) delayPos = 0;
 
-        for (int c = 0; c < numOut; ++c) { ch[c][i] = x[c]; wet[c][i] = x[c]; }
+        // La reverb recibe la voz y también un poco del delay (se funden)
+        float rl = 0.0f, rr = 0.0f;
+        reverb.process (send + 0.3f * (dl + dr) * delayAmt, rl, rr);
+
+        float fxL = duck * (delayRet * dl + revRet * rl);
+        float fxR = duck * (delayRet * dr + revRet * rr);
+        const float fxM = 0.5f * (fxL + fxR), fxS = 0.5f * (fxL - fxR) * fxSide;
+        fxL = fxM + fxS; fxR = fxM - fxS;
+
+        if (numOut > 1) { ch[0][i] = x[0] + fxL; ch[1][i] = x[1] + fxR; }
+        else            { ch[0][i] = x[0] + fxM; }
     }
     grDisplay = maxGr;
 
-    // Reverb en paralelo
-    const float revAmt = p ("reverb") / 100.0f;
-    juce::Reverb::Parameters rp;
-    rp.roomSize = 0.35f + 0.6f * (p ("sala") / 100.0f);
-    rp.damping = 0.55f;
-    rp.width = 0.6f + 0.4f * width;
-    rp.wetLevel = 1.0f;
-    rp.dryLevel = 0.0f;
-    reverb.setParameters (rp);
-    if (revAmt > 0.0f)
-    {
-        if (numOut > 1) reverb.processStereo (wet[0], wet[1], n);
-        else            reverb.processMono (wet[0], n);
-        for (int c = 0; c < numOut; ++c)
-            buffer.addFrom (c, 0, wetBuf, c, 0, n, revAmt * 0.35f);
-    }
-
     outGain.setTargetValue (juce::Decibels::decibelsToGain (p ("salida")));
+    // Limitador final: nunca pasa de -1 dB (sin clips en FL)
+    const float limRel = std::exp (-1.0f / (0.08f * (float) fs));
     for (int i = 0; i < n; ++i)
     {
         const float g = outGain.getNextValue();
-        for (int c = 0; c < numOut; ++c) ch[c][i] *= g;
+        float pk = 0.0f;
+        for (int c = 0; c < numOut; ++c) { ch[c][i] *= g; pk = juce::jmax (pk, std::abs (ch[c][i])); }
+        limEnv = pk > limEnv ? pk : limRel * limEnv + (1 - limRel) * pk;
+        const float lg = limEnv > 0.89f ? 0.89f / limEnv : 1.0f;
+        for (int c = 0; c < numOut; ++c) ch[c][i] *= lg;
     }
 }
 

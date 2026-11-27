@@ -5,6 +5,7 @@
 #include <vector>
 #include "Biquad.h"
 #include "StyleEngine.h"
+#include "FlyReverb.h"
 
 class FlyMixChatProcessor : public juce::AudioProcessor
 {
@@ -51,16 +52,14 @@ private:
     float compEnv = 0.0f, deessEnv = 0.0f;
     std::atomic<float> grDisplay { 0.0f };
 
-    // Ancho (Haas) y delay
-    std::vector<float> widthBuf;
-    int widthPos = 0;
+    // Efectos en paralelo (como un envío de estudio)
+    Biquad sendHp, sendLp, satLp[2];
     std::array<std::vector<float>, 2> delayBuf;
     int delayPos = 0;
     std::array<float, 2> delayLp {};
     juce::SmoothedValue<float> delayTimeSamples;
-
-    juce::Reverb reverb;
-    juce::AudioBuffer<float> wetBuf;
+    FlyReverb reverb;
+    float duckEnv = 0.0f, limEnv = 0.0f;
     juce::SmoothedValue<float> outGain;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FlyMixChatProcessor)
